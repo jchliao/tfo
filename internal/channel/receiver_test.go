@@ -181,3 +181,102 @@ func TestReceiver_NoReplyWhenDisabled(t *testing.T) {
 		t.Fatalf("expected 0 replies when disabled, got %d", len(adapter.replies))
 	}
 }
+
+func TestReceiver_ImageMessage(t *testing.T) {
+	nc := &mockNoteCreator{}
+	r := NewReceiver(nc)
+	r.SetImageSaver(func(data []byte) (string, error) {
+		if string(data) != "image-bytes" {
+			t.Errorf("saver got %q", data)
+		}
+		return "![](../attachments/2026-10/0123456789abcdef.png)", nil
+	})
+
+	adapter := &mockAdapter{name: "wechat"}
+	r.RegisterAdapter(adapter)
+	r.StartAll(context.Background())
+
+	if err := adapter.handler(context.Background(), &IncomingMessage{
+		ChannelType: "wechat",
+		SenderID:    "user1",
+		Content:     "看这张图",
+		Type:        MessageTypeImage,
+		Images:      []IncomingImage{{Data: []byte("image-bytes")}},
+		Timestamp:   time.Now(),
+		ReplyToken:  "token",
+	}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	if len(nc.notes) != 1 {
+		t.Fatalf("expected 1 note, got %d", len(nc.notes))
+	}
+	note := nc.notes[0]
+	if !contains(note, "看这张图") {
+		t.Fatalf("note should keep text, got: %s", note)
+	}
+	if !contains(note, "![](../attachments/2026-10/0123456789abcdef.png)") {
+		t.Fatalf("note should contain image markdown, got: %s", note)
+	}
+	if !contains(note, "#wechat") {
+		t.Fatalf("note should contain channel tag, got: %s", note)
+	}
+
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if len(adapter.replies) != 1 || !contains(adapter.replies[0], "1 张图片") {
+		t.Fatalf("reply = %v, want receipt mentioning the image", adapter.replies)
+	}
+}
+
+func TestReceiver_ImageOnlyWithoutSaver(t *testing.T) {
+	nc := &mockNoteCreator{}
+	r := NewReceiver(nc) // 未注入 ImageSaver
+
+	adapter := &mockAdapter{name: "wechat"}
+	r.RegisterAdapter(adapter)
+	r.StartAll(context.Background())
+
+	if err := adapter.handler(context.Background(), &IncomingMessage{
+		ChannelType: "wechat",
+		Images:      []IncomingImage{{Data: []byte("image-bytes")}},
+		ReplyToken:  "token",
+	}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	if len(nc.notes) != 0 {
+		t.Fatalf("expected no note when image cannot be stored, got %d", len(nc.notes))
+	}
+}
+
+func TestReceiver_SaveImageErrorKeepsText(t *testing.T) {
+	nc := &mockNoteCreator{}
+	r := NewReceiver(nc)
+	r.SetImageSaver(func([]byte) (string, error) {
+		return "", context.DeadlineExceeded
+	})
+
+	adapter := &mockAdapter{name: "wechat"}
+	r.RegisterAdapter(adapter)
+	r.StartAll(context.Background())
+
+	adapter.handler(context.Background(), &IncomingMessage{
+		ChannelType: "wechat",
+		Content:     "图片没存上但文字要留下",
+		Images:      []IncomingImage{{Data: []byte("image-bytes")}},
+	})
+
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	if len(nc.notes) != 1 || !contains(nc.notes[0], "图片没存上但文字要留下") {
+		t.Fatalf("text should still be saved, got: %v", nc.notes)
+	}
+	if contains(nc.notes[0], "![](") {
+		t.Fatalf("no image markdown expected, got: %s", nc.notes[0])
+	}
+}

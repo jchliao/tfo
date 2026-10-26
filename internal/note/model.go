@@ -19,6 +19,8 @@ type NoteSummary struct {
 	Tags      []string  `json:"tags"`
 	CreatedAt time.Time `json:"createdAt"`
 	Preview   string    `json:"preview"`
+	// Images 是正文引用的图片地址（Markdown 原文形式），列表页据此渲染缩略图。
+	Images []string `json:"images,omitempty"`
 }
 
 // NoteFilter 笔记查询过滤条件

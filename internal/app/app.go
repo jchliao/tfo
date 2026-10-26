@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/fs"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/libi/tfo/internal/attachment"
 	"github.com/libi/tfo/internal/channel"
 	"github.com/libi/tfo/internal/channel/wechat"
 	"github.com/libi/tfo/internal/config"
@@ -101,12 +103,12 @@ func (a *App) ServerDependencies(frontendFS fs.FS) *server.Dependencies {
 		Config:        a.config,
 		Receiver:      a.receiver,
 		WeChatAdapter: a.wechatAdapter,
+		Attachments:   attachment.NewStore(a.config.DataDir),
 		ConfigSaver: func(cfg *config.Config) error {
 			return cfg.Save()
 		},
 		WeChatInit: func() (*channel.Receiver, *wechat.WeChatAdapter) {
-			nc := &noteCreatorAdapter{svc: a.noteService}
-			r := channel.NewReceiver(nc)
+			r := a.newReceiver()
 			wa := wechat.NewWeChatAdapter(a.config.WeChat)
 			r.RegisterAdapter(wa)
 			return r, wa
@@ -198,13 +200,7 @@ func (a *App) initSearch(cfg *config.Config) {
 		log.Println("rebuilding search index...")
 		scanFn := func(ctx context.Context, callback func(*search.IndexDocument) error) error {
 			return a.store.ScanAll(ctx, func(n *note.Note) error {
-				return callback(&search.IndexDocument{
-					ID:        n.ID,
-					Title:     n.Title,
-					Content:   n.Content,
-					Tags:      n.Tags,
-					CreatedAt: n.CreatedAt,
-				})
+				return callback(note.SearchDocument(n))
 			})
 		}
 		if err := a.indexer.Rebuild(a.ctx, scanFn); err != nil {
@@ -226,13 +222,33 @@ func (n *noteCreatorAdapter) Create(ctx context.Context, content string) (interf
 	return n.svc.Create(ctx, content)
 }
 
+// newReceiver 创建通道接收器，并注入图片存储，
+// 使微信等通道收到的图片能像前端上传一样落盘到 attachments/。
+func (a *App) newReceiver() *channel.Receiver {
+	r := channel.NewReceiver(&noteCreatorAdapter{svc: a.noteService})
+	r.SetImageSaver(a.saveChannelImage)
+	return r
+}
+
+// saveChannelImage 把通道收到的图片存入附件目录，返回可插入笔记正文的 Markdown。
+func (a *App) saveChannelImage(data []byte) (string, error) {
+	if a.config == nil {
+		return "", fmt.Errorf("app: config is not loaded")
+	}
+	result, err := attachment.NewStore(a.config.DataDir).Save(bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	return result.Markdown, nil
+}
+
 func (a *App) initChannel(cfg *config.Config) {
 	if !cfg.WeChat.Enabled {
 		log.Println("[channel] wechat disabled, skipping")
 		return
 	}
 
-	a.receiver = channel.NewReceiver(&noteCreatorAdapter{svc: a.noteService})
+	a.receiver = a.newReceiver()
 	a.wechatAdapter = wechat.NewWeChatAdapter(cfg.WeChat)
 	a.receiver.RegisterAdapter(a.wechatAdapter)
 
@@ -262,7 +278,7 @@ func (a *App) StartWeChat() error {
 		if a.config.WeChat.BaseURL == "" || a.config.WeChat.Token == "" {
 			return fmt.Errorf("wechat not configured: baseUrl and token are required")
 		}
-		a.receiver = channel.NewReceiver(&noteCreatorAdapter{svc: a.noteService})
+		a.receiver = a.newReceiver()
 		a.wechatAdapter = wechat.NewWeChatAdapter(a.config.WeChat)
 		a.receiver.RegisterAdapter(a.wechatAdapter)
 	}
@@ -294,7 +310,7 @@ func (a *App) LoginWeChatWithQR(result *wechat.QRStatusResponse) error {
 	if a.wechatAdapter == nil {
 		a.wechatAdapter = wechat.NewWeChatAdapter(a.config.WeChat)
 		if a.receiver == nil {
-			a.receiver = channel.NewReceiver(&noteCreatorAdapter{svc: a.noteService})
+			a.receiver = a.newReceiver()
 		}
 		a.receiver.RegisterAdapter(a.wechatAdapter)
 	}
@@ -319,13 +335,7 @@ func (a *App) initWatcher(cfg *config.Config) {
 				log.Printf("[watcher] load %s: %v", event.FilePath, err)
 				return
 			}
-			doc := &search.IndexDocument{
-				ID:        n.ID,
-				Title:     n.Title,
-				Content:   n.Content,
-				Tags:      n.Tags,
-				CreatedAt: n.CreatedAt,
-			}
+			doc := note.SearchDocument(n)
 			if err := a.indexer.Index(doc); err != nil {
 				log.Printf("[watcher] index %s: %v", n.ID, err)
 			}

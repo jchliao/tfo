@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	goqrcode "github.com/skip2/go-qrcode"
 
+	"github.com/libi/tfo/internal/attachment"
 	"github.com/libi/tfo/internal/channel"
 	"github.com/libi/tfo/internal/channel/wechat"
 	"github.com/libi/tfo/internal/config"
@@ -33,6 +36,10 @@ type Dependencies struct {
 	Searcher      search.Searcher
 	ConfigSaver   func(*config.Config) error
 	WeChatInit    func() (*channel.Receiver, *wechat.WeChatAdapter)
+
+	// Attachments stores images referenced by notes (dataDir/attachments).
+	// If nil, image upload endpoints return 503.
+	Attachments *attachment.Store
 
 	// FrontendFS is the embedded frontend static files (frontend/out/).
 	// If nil, no static file serving is configured (dev mode).
@@ -61,6 +68,8 @@ func New(deps *Dependencies) *gin.Engine {
 		api.PUT("/notes/:id", updateNote(deps))
 		api.DELETE("/notes/:id", deleteNote(deps))
 		api.GET("/notes", listNotes(deps))
+		api.POST("/attachments", uploadAttachment(deps))
+		api.GET("/attachments/:month/:name", getAttachment(deps))
 		api.GET("/heatmap", getHeatmap(deps))
 		api.GET("/tags", getAllTags(deps))
 		api.GET("/search", searchNotes(deps))
@@ -237,6 +246,78 @@ func listNotes(deps *Dependencies) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"items": notes, "total": total})
+	}
+}
+
+// uploadAttachment 接收图片上传（multipart 字段 file，或直接以图片为请求体），
+// 写入数据目录的 attachments/<YYYY-MM>/ 下，并返回可直接插入笔记正文的 Markdown。
+func uploadAttachment(deps *Dependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if deps.Attachments == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "attachment storage is not available"})
+			return
+		}
+
+		// 限制请求体大小，避免把超大文件读进内存
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, attachment.MaxSize+(1<<20))
+
+		var src io.Reader
+		if strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
+			fileHeader, err := c.FormFile("file")
+			if err != nil {
+				if strings.Contains(err.Error(), "too large") {
+					c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("image is larger than %d MB", attachment.MaxSize>>20)})
+					return
+				}
+				c.JSON(http.StatusBadRequest, gin.H{"error": `missing multipart field "file"`})
+				return
+			}
+			f, err := fileHeader.Open()
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "cannot read uploaded file"})
+				return
+			}
+			defer f.Close()
+			src = f
+		} else {
+			src = c.Request.Body
+		}
+
+		result, err := deps.Attachments.Save(src)
+		if err != nil {
+			switch {
+			case errors.Is(err, attachment.ErrTooLarge):
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("image is larger than %d MB", attachment.MaxSize>>20)})
+			case errors.Is(err, attachment.ErrUnsupportedType):
+				c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "only png/jpeg/gif/webp/bmp images are supported"})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			}
+			return
+		}
+
+		c.JSON(http.StatusCreated, result)
+	}
+}
+
+// getAttachment 返回附件文件内容。附件是内容寻址的，可以长期缓存。
+func getAttachment(deps *Dependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if deps.Attachments == nil {
+			c.Status(http.StatusServiceUnavailable)
+			return
+		}
+
+		absPath, err := deps.Attachments.AbsPath(c.Param("month"), c.Param("name"))
+		if err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+
+		c.Header("Content-Type", attachment.ContentType(absPath))
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		c.File(absPath)
 	}
 }
 

@@ -21,6 +21,9 @@ const (
 	backoffDelay           = 30 * time.Second
 	retryDelay             = 2 * time.Second
 	sessionPauseDuration   = 1 * time.Hour
+
+	// maxImagesPerMessage 单条消息最多处理的图片数（微信一次最多发 9 张）。
+	maxImagesPerMessage = 9
 )
 
 // WeChatAdapter 微信 iLink Bot 适配器
@@ -33,14 +36,18 @@ type WeChatAdapter struct {
 	state   channel.ConnState
 	cancel  context.CancelFunc
 	done    chan struct{}
+
+	// cdnBaseURL 图片等媒体的下载根地址，测试中可替换。
+	cdnBaseURL string
 }
 
 // NewWeChatAdapter 创建微信适配器
 func NewWeChatAdapter(cfg config.WeChatConfig) *WeChatAdapter {
 	return &WeChatAdapter{
-		cfg:    cfg,
-		client: NewClient(),
-		state:  channel.ConnStateDisconnected,
+		cfg:        cfg,
+		client:     NewClient(),
+		state:      channel.ConnStateDisconnected,
+		cdnBaseURL: DefaultCDNBaseURL,
 	}
 }
 
@@ -183,10 +190,12 @@ func (a *WeChatAdapter) pollLoop(ctx context.Context) {
 	}
 }
 
-// processMessage 提取文本内容并交给 handler
+// processMessage 提取文本与图片内容并交给 handler
 func (a *WeChatAdapter) processMessage(ctx context.Context, msg WeixinMessage) {
 	text := extractText(msg)
-	if strings.TrimSpace(text) == "" {
+	images := a.downloadImages(ctx, msg)
+
+	if strings.TrimSpace(text) == "" && len(images) == 0 {
 		return
 	}
 
@@ -203,11 +212,17 @@ func (a *WeChatAdapter) processMessage(ctx context.Context, msg WeixinMessage) {
 		ts = time.UnixMilli(msg.CreateTimeMs)
 	}
 
+	msgType := channel.MessageTypeText
+	if strings.TrimSpace(text) == "" {
+		msgType = channel.MessageTypeImage
+	}
+
 	incoming := &channel.IncomingMessage{
 		ChannelType: "wechat",
 		SenderID:    strings.TrimSpace(msg.FromUserID),
 		Content:     text,
-		Type:        channel.MessageTypeText,
+		Type:        msgType,
+		Images:      images,
 		Timestamp:   ts,
 		ReplyToken:  buildReplyToken(msg),
 	}
@@ -215,6 +230,37 @@ func (a *WeChatAdapter) processMessage(ctx context.Context, msg WeixinMessage) {
 	if err := handler(ctx, incoming); err != nil {
 		log.Printf("[wechat] handle message %d: %v", msg.MessageID, err)
 	}
+}
+
+// downloadImages 下载并解密消息中的所有图片（失败的单张跳过）。
+func (a *WeChatAdapter) downloadImages(ctx context.Context, msg WeixinMessage) []channel.IncomingImage {
+	a.mu.RLock()
+	base := a.cdnBaseURL
+	a.mu.RUnlock()
+	if strings.TrimSpace(base) == "" {
+		base = DefaultCDNBaseURL
+	}
+
+	var images []channel.IncomingImage
+	for _, item := range msg.ItemList {
+		if item.Type != ItemTypeImage || item.ImageItem == nil {
+			continue
+		}
+		if len(images) >= maxImagesPerMessage {
+			log.Printf("[wechat] message %d has more than %d images, extras ignored", msg.MessageID, maxImagesPerMessage)
+			break
+		}
+		data, err := a.client.DownloadImage(ctx, base, item.ImageItem)
+		if err != nil {
+			log.Printf("[wechat] download image of message %d: %v", msg.MessageID, err)
+			continue
+		}
+		if len(data) == 0 {
+			continue
+		}
+		images = append(images, channel.IncomingImage{Data: data})
+	}
+	return images
 }
 
 // extractText 从消息中提取文本内容（包括语音转文字）

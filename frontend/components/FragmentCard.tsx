@@ -1,12 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { format } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ChevronDown, ChevronUp, Copy, Pencil, Trash2, Check } from 'lucide-react';
+import { ChevronDown, ChevronUp, Copy, Pencil, Trash2, Check, ImagePlus, Loader2 } from 'lucide-react';
 import copy from 'clipboard-copy';
 import type { Fragment } from '@/types';
 import { useI18n } from './I18nProvider';
 import { getNote } from '@/lib/api';
+import { ImageLightbox } from './ImageLightbox';
+import { resolveImageSrc } from '@/lib/images';
+import { useImageUpload } from '@/hooks/use-image-upload';
 
 const DEFAULT_TITLE_MIN_CONTENT_LENGTH = 300;
 
@@ -109,7 +113,49 @@ export function FragmentCard({ fragment, titleMinContentLength, onDelete, onUpda
   // Copy state
   const [copied, setCopied] = useState(false);
 
+  // Image state
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const {
+    uploading: uploadingImage,
+    dragging: imageDragging,
+    openFilePicker,
+    fileInputProps,
+    handlePaste: handleImagePaste,
+    handleDragOver: handleImageDragOver,
+    handleDragLeave: handleImageDragLeave,
+    handleDrop: handleImageDrop,
+  } = useImageUpload({
+    textareaRef,
+    getValue: () => editValue,
+    setValue: setEditValue,
+    onError: reason => {
+      setImageError(
+        reason === 'size' ? t('imageTooLarge') : reason === 'type' ? t('imageUnsupported') : t('imageUploadError'),
+      );
+      setTimeout(() => setImageError(null), 4000);
+    },
+  });
+
+  const markdownComponents: Components = {
+    a: ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />,
+    img: ({ node, src, alt, ...props }) => {
+      const resolved = resolveImageSrc(typeof src === 'string' ? src : undefined);
+      return (
+        <img
+          {...props}
+          src={resolved}
+          alt={alt ?? ''}
+          loading="lazy"
+          className="my-2 max-h-80 w-auto max-w-full cursor-zoom-in rounded-lg border border-gray-100"
+          onClick={() => setPreviewSrc(resolved)}
+        />
+      );
+    },
+  };
 
   // Detect if content is likely truncated (ends with "…" or is a search snippet)
   const isTruncated = fragment.content.endsWith('…') || fragment.content.endsWith('...');
@@ -141,6 +187,11 @@ export function FragmentCard({ fragment, titleMinContentLength, onDelete, onUpda
   };
 
   const displayContent = expanded && fullContent !== null ? fullContent : fragment.content;
+
+  // 列表摘要里不含图片语法，图片以缩略图形式单独展示（展开后由 Markdown 渲染）
+  const allImages = fragment.images ?? [];
+  const thumbnails = expanded ? [] : allImages.slice(0, 4);
+  const hiddenThumbnailCount = Math.max(0, allImages.length - thumbnails.length);
 
   // --- Copy ---
   const handleCopy = async () => {
@@ -267,24 +318,43 @@ export function FragmentCard({ fragment, titleMinContentLength, onDelete, onUpda
               ref={textareaRef}
               value={editValue}
               onChange={e => setEditValue(e.target.value)}
-              className="w-full min-h-[140px] resize-y border border-gray-200 rounded-lg p-3 text-sm text-gray-800 focus:outline-none focus:ring-1 focus:ring-gray-400 transition-shadow"
+              onPaste={handleImagePaste}
+              onDragOver={handleImageDragOver}
+              onDragLeave={handleImageDragLeave}
+              onDrop={handleImageDrop}
+              className={`w-full min-h-[140px] resize-y border rounded-lg p-3 text-sm text-gray-800 focus:outline-none focus:ring-1 transition-shadow ${imageDragging ? 'border-gray-400 ring-2 ring-gray-300' : 'border-gray-200 focus:ring-gray-400'
+                }`}
             />
-            <div className="flex items-center justify-end gap-2">
+            {imageError && <p className="text-xs text-red-500">{imageError}</p>}
+            <div className="flex items-center justify-between gap-2">
               <button
-                onClick={handleCancelEdit}
-                disabled={saving}
-                className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                type="button"
+                onClick={openFilePicker}
+                disabled={uploadingImage || saving}
+                title={t('addImage')}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
               >
-                {t('editCancel')}
+                {uploadingImage ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+                {uploadingImage ? t('uploadingImage') : t('addImage')}
               </button>
-              <button
-                onClick={handleSaveEdit}
-                disabled={saving || !editValue.trim()}
-                className="px-3 py-1.5 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50 transition-colors"
-              >
-                {saving ? t('savingButton') : t('editSave')}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCancelEdit}
+                  disabled={saving}
+                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                >
+                  {t('editCancel')}
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  disabled={saving || !editValue.trim()}
+                  className="px-3 py-1.5 text-sm rounded-lg bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50 transition-colors"
+                >
+                  {saving ? t('savingButton') : t('editSave')}
+                </button>
+              </div>
             </div>
+            <input {...fileInputProps} />
           </div>
         ) : (
           /* ── Normal view mode ── */
@@ -300,7 +370,7 @@ export function FragmentCard({ fragment, titleMinContentLength, onDelete, onUpda
                 <div className="prose prose-sm max-w-none text-gray-600 prose-p:leading-relaxed prose-a:text-blue-600 hover:prose-a:text-blue-500">
                   {fragment.highlights && fragment.highlights.length > 0 && !expanded
                     ? <p className="leading-relaxed"><HighlightedText text={displayContent} highlights={fragment.highlights} /></p>
-                    : <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a> }}>{displayContent}</ReactMarkdown>}
+                    : <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{displayContent}</ReactMarkdown>}
                 </div>
               </>
             ) : (
@@ -308,11 +378,36 @@ export function FragmentCard({ fragment, titleMinContentLength, onDelete, onUpda
                 <div className="flex-1 prose prose-sm max-w-none text-gray-700 prose-p:my-1 prose-p:leading-relaxed prose-a:text-blue-600 hover:prose-a:text-blue-500">
                   {fragment.highlights && fragment.highlights.length > 0 && !expanded
                     ? <p className="my-1 leading-relaxed"><HighlightedText text={displayContent} highlights={fragment.highlights} /></p>
-                    : <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer">{children}</a> }}>{displayContent}</ReactMarkdown>}
+                    : <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{displayContent}</ReactMarkdown>}
                 </div>
                 <time className="shrink-0 text-[11px] text-gray-400 font-mono pt-1">
                   {fragment.date ? format(new Date(fragment.date), 'MMM d, HH:mm', { locale: dateLocale }) : ''}
                 </time>
+              </div>
+            )}
+
+            {/* Thumbnails: 列表里只展示摘要，图片单独以缩略图呈现 */}
+            {!expanded && thumbnails.length > 0 && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {thumbnails.map((src, index) => (
+                  <button
+                    key={`${src}-${index}`}
+                    type="button"
+                    onClick={() => setPreviewSrc(resolveImageSrc(src))}
+                    title={t('imagePreview')}
+                    className="overflow-hidden rounded-lg border border-gray-100 transition-shadow hover:shadow-sm"
+                  >
+                    <img
+                      src={resolveImageSrc(src)}
+                      alt=""
+                      loading="lazy"
+                      className="h-20 w-20 object-cover"
+                    />
+                  </button>
+                ))}
+                {hiddenThumbnailCount > 0 && (
+                  <span className="text-[11px] text-gray-400">+{hiddenThumbnailCount}</span>
+                )}
               </div>
             )}
 
@@ -361,6 +456,10 @@ export function FragmentCard({ fragment, titleMinContentLength, onDelete, onUpda
           onCancel={() => setShowDeleteDialog(false)}
           isDeleting={deleting}
         />
+      )}
+
+      {previewSrc && (
+        <ImageLightbox src={previewSrc} onClose={() => setPreviewSrc(null)} />
       )}
     </>
   );

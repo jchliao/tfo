@@ -1,7 +1,12 @@
 package wechat
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -185,5 +190,132 @@ func TestParseReplyToken_Invalid(t *testing.T) {
 	_, _, ok = parseReplyToken("no-separator")
 	if ok {
 		t.Fatal("expected false for token without separator")
+	}
+}
+
+func TestProcessMessage_ImageOnly(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	ciphertext := encryptECB(t, testPNG, key)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(ciphertext)
+	}))
+	defer server.Close()
+
+	a := NewWeChatAdapter(config.WeChatConfig{})
+	a.cdnBaseURL = server.URL
+
+	var got *channel.IncomingMessage
+	a.SetMessageHandler(func(_ context.Context, msg *channel.IncomingMessage) error {
+		got = msg
+		return nil
+	})
+
+	a.processMessage(context.Background(), WeixinMessage{
+		MessageID:  1,
+		FromUserID: "user1",
+		ItemList: []MessageItem{{
+			Type: ItemTypeImage,
+			ImageItem: &ImageItem{Media: &CDNMedia{
+				EncryptQueryParam: "param",
+				AESKey:            base64.StdEncoding.EncodeToString([]byte(hex.EncodeToString(key))),
+			}},
+		}},
+	})
+
+	if got == nil {
+		t.Fatal("handler should be called for an image-only message")
+	}
+	if got.Type != channel.MessageTypeImage {
+		t.Fatalf("type = %v, want image", got.Type)
+	}
+	if len(got.Images) != 1 || !bytes.Equal(got.Images[0].Data, testPNG) {
+		t.Fatalf("images = %+v, want one decrypted image", got.Images)
+	}
+}
+
+func TestProcessMessage_TextAndImages(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	ciphertext := encryptECB(t, testPNG, key)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(ciphertext)
+	}))
+	defer server.Close()
+
+	a := NewWeChatAdapter(config.WeChatConfig{})
+	a.cdnBaseURL = server.URL
+
+	var got *channel.IncomingMessage
+	a.SetMessageHandler(func(_ context.Context, msg *channel.IncomingMessage) error {
+		got = msg
+		return nil
+	})
+
+	aesKey := base64.StdEncoding.EncodeToString([]byte(hex.EncodeToString(key)))
+	a.processMessage(context.Background(), WeixinMessage{
+		MessageID:  2,
+		FromUserID: "user1",
+		ItemList: []MessageItem{
+			{Type: ItemTypeText, TextItem: &TextItem{Text: "看这张图"}},
+			{Type: ItemTypeImage, ImageItem: &ImageItem{Media: &CDNMedia{EncryptQueryParam: "p1", AESKey: aesKey}}},
+			{Type: ItemTypeImage, ImageItem: &ImageItem{Media: &CDNMedia{EncryptQueryParam: "p2", AESKey: aesKey}}},
+		},
+	})
+
+	if got == nil {
+		t.Fatal("handler should be called")
+	}
+	if got.Content != "看这张图" {
+		t.Fatalf("content = %q", got.Content)
+	}
+	if len(got.Images) != 2 {
+		t.Fatalf("images = %d, want 2", len(got.Images))
+	}
+}
+
+func TestProcessMessage_ImageDownloadFailureIgnored(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	a := NewWeChatAdapter(config.WeChatConfig{})
+	a.cdnBaseURL = server.URL
+
+	var got *channel.IncomingMessage
+	a.SetMessageHandler(func(_ context.Context, msg *channel.IncomingMessage) error {
+		got = msg
+		return nil
+	})
+
+	a.processMessage(context.Background(), WeixinMessage{
+		MessageID: 3,
+		ItemList: []MessageItem{{
+			Type:      ItemTypeImage,
+			ImageItem: &ImageItem{Media: &CDNMedia{EncryptQueryParam: "p", AESKey: "00112233445566778899aabbccddeeff"}},
+		}},
+	})
+
+	if got != nil {
+		t.Fatalf("handler should not be called when the only image fails, got %+v", got)
+	}
+}
+
+func TestProcessMessage_ImageWithoutMediaIgnored(t *testing.T) {
+	a := NewWeChatAdapter(config.WeChatConfig{})
+	called := false
+	a.SetMessageHandler(func(_ context.Context, msg *channel.IncomingMessage) error {
+		called = true
+		return nil
+	})
+
+	a.processMessage(context.Background(), WeixinMessage{
+		MessageID: 4,
+		ItemList:  []MessageItem{{Type: ItemTypeImage, ImageItem: &ImageItem{}}},
+	})
+
+	if called {
+		t.Fatal("handler should not be called for an image item without download url")
 	}
 }

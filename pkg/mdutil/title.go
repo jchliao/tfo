@@ -11,31 +11,25 @@ const (
 )
 
 // ExtractTitle 从 Markdown 内容中提取标题。
+// 提取时跳过空行、纯标签行与纯图片行，取第一行有效文本。
 func ExtractTitle(content string) string {
-	firstLine := extractFirstLine(content)
-	if firstLine == "" {
-		return "无标题"
-	}
-
-	cleaned := tagRegexp.ReplaceAllString(firstLine, "")
-	cleaned = strings.TrimSpace(cleaned)
-
-	if cleaned == "" {
-		return "无标题"
-	}
-
-	return truncate(cleaned, MaxTitleLen)
-}
-
-func extractFirstLine(content string) string {
-	lines := strings.SplitN(content, "\n", -1)
-	for _, line := range lines {
+	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			return trimmed
+		if trimmed == "" {
+			continue
 		}
+
+		// 去掉图片与标签标记后再判断该行是否有实际文字
+		cleaned := imageRefRegexp.ReplaceAllString(trimmed, " ")
+		cleaned = tagRegexp.ReplaceAllString(cleaned, "")
+		cleaned = strings.TrimSpace(cleaned)
+		if cleaned == "" {
+			continue
+		}
+
+		return truncate(cleaned, MaxTitleLen)
 	}
-	return ""
+	return "无标题"
 }
 
 func truncate(s string, maxRunes int) string {

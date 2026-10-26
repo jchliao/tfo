@@ -15,6 +15,18 @@ export interface NoteSummary {
     tags: string[];
     createdAt: string;
     preview: string;
+    images?: string[];
+}
+
+export interface UploadedImage {
+    /** 相对数据目录的路径，如 attachments/2026-10/1f2e3d4c5b6a7890.png */
+    path: string;
+    /** 后端访问地址，如 /api/attachments/2026-10/1f2e3d4c5b6a7890.png */
+    url: string;
+    /** 可直接插入正文的 Markdown 片段 */
+    markdown: string;
+    size: number;
+    mime: string;
 }
 
 export interface TagCount {
@@ -113,6 +125,31 @@ export async function listNotesByMonth(month: string): Promise<NoteSummary[]> {
 export async function listNotesRecent(offset = 0, limit = 20): Promise<{ items: NoteSummary[]; total: number }> {
     const res = await fetch(`${API_BASE}/notes?offset=${offset}&limit=${limit}`);
     if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
+// --- Attachments (images) ---
+
+/** 单张图片上限，与后端 attachment.MaxSize 保持一致 */
+export const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+
+export async function uploadImage(file: File): Promise<UploadedImage> {
+    const form = new FormData();
+    form.append('file', file, file.name || 'image.jpg');
+    const res = await fetch(`${API_BASE}/attachments`, {
+        method: 'POST',
+        body: form,
+    });
+    if (!res.ok) {
+        let message = `upload failed (${res.status})`;
+        try {
+            const body = await res.json();
+            if (body?.error) message = body.error;
+        } catch {
+            // ignore non-JSON error bodies
+        }
+        throw new Error(message);
+    }
     return res.json();
 }
 

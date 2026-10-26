@@ -75,14 +75,14 @@ export default function Home() {
       if (selectedDate) {
         const summaries = await api.listNotesByDate(format(selectedDate, 'yyyy-MM-dd'));
         const frags: Fragment[] = (summaries || []).map(s => ({
-          id: s.id, title: s.title, content: s.preview, date: s.createdAt, tags: s.tags || [],
+          id: s.id, title: s.title, content: s.preview, date: s.createdAt, tags: s.tags || [], images: s.images,
         }));
         setFragments(frags);
         setHasMore(false);
       } else {
         const { items, total } = await api.listNotesRecent(0, PAGE_SIZE);
         const frags: Fragment[] = (items || []).map(s => ({
-          id: s.id, title: s.title, content: s.preview, date: s.createdAt, tags: s.tags || [],
+          id: s.id, title: s.title, content: s.preview, date: s.createdAt, tags: s.tags || [], images: s.images,
         }));
         setFragments(frags);
         setHasMore(frags.length < total);
@@ -194,7 +194,7 @@ export default function Home() {
       } else if (!selectedDate) {
         const { items, total } = await api.listNotesRecent(offset, PAGE_SIZE);
         const newFrags = (items || []).map(s => ({
-          id: s.id, title: s.title, content: s.preview, date: s.createdAt, tags: s.tags || [],
+          id: s.id, title: s.title, content: s.preview, date: s.createdAt, tags: s.tags || [], images: s.images,
         }));
         setFragments(prev => [...prev, ...newFrags]);
         setHasMore(offset + newFrags.length < total);

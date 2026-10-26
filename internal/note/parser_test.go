@@ -53,6 +53,27 @@ func TestParserParse(t *testing.T) {
 	}
 }
 
+func TestParserExtractsImages(t *testing.T) {
+	p := NewParser()
+
+	content := "界面草图\n\n![](../attachments/2026-10/1f2e3d4c5b6a7890.png)\n\n再补充一句 #设计"
+	result := p.Parse(content)
+
+	want := []string{"../attachments/2026-10/1f2e3d4c5b6a7890.png"}
+	if !sliceEqual(result.Images, want) {
+		t.Errorf("Images = %v, want %v", result.Images, want)
+	}
+	if result.Title != "界面草图" {
+		t.Errorf("Title = %q, want 界面草图", result.Title)
+	}
+	if strings.Contains(result.Preview, "![]") {
+		t.Errorf("Preview 不应包含图片语法: %q", result.Preview)
+	}
+	if !strings.Contains(result.Preview, "界面草图") {
+		t.Errorf("Preview = %q, want it to contain text", result.Preview)
+	}
+}
+
 func sliceEqual(a, b []string) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true

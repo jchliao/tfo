@@ -29,6 +29,33 @@ type TextItem struct {
 	Text string `json:"text,omitempty"`
 }
 
+// CDNMedia 微信 CDN 上的加密媒体引用。
+// 内容为 AES-128-ECB(PKCS7) 密文，需要用 AESKey 解密后才能使用。
+type CDNMedia struct {
+	// EncryptQueryParam 下载时拼接在 /download?encrypted_query_param= 后的参数
+	EncryptQueryParam string `json:"encrypt_query_param,omitempty"`
+	// AESKey 媒体密钥，图片为 base64(raw 16 bytes)，文件/语音/视频为 base64(hex 32)
+	AESKey string `json:"aes_key,omitempty"`
+	// EncryptType 加密方式，0 或缺省表示 AES-128-ECB
+	EncryptType int `json:"encrypt_type,omitempty"`
+	// FullURL 部分服务端实现会直接给出完整下载地址（仍是密文）
+	FullURL string `json:"full_url,omitempty"`
+}
+
+// ImageItem 图片内容
+type ImageItem struct {
+	Media *CDNMedia `json:"media,omitempty"`
+	// AESKey 图片密钥，通常是 32 位 hex 字符串
+	AESKey string `json:"aeskey,omitempty"`
+	// URL 明文图片地址（部分实现提供，有则可直接下载）
+	URL         string `json:"url,omitempty"`
+	MidSize     int64  `json:"mid_size,omitempty"`
+	ThumbSize   int64  `json:"thumb_size,omitempty"`
+	ThumbWidth  int    `json:"thumb_width,omitempty"`
+	ThumbHeight int    `json:"thumb_height,omitempty"`
+	HDSize      int64  `json:"hd_size,omitempty"`
+}
+
 // VoiceItem 语音内容（含语音转文字）
 type VoiceItem struct {
 	Text string `json:"text,omitempty"` // speech-to-text 结果
@@ -38,6 +65,7 @@ type VoiceItem struct {
 type MessageItem struct {
 	Type      int        `json:"type,omitempty"`
 	TextItem  *TextItem  `json:"text_item,omitempty"`
+	ImageItem *ImageItem `json:"image_item,omitempty"`
 	VoiceItem *VoiceItem `json:"voice_item,omitempty"`
 }
 

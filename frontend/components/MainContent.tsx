@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Send, Loader2 } from 'lucide-react';
+import { Search, Send, Loader2, ImagePlus } from 'lucide-react';
 import type { Fragment } from '@/types';
 import { FragmentCard } from './FragmentCard';
 import { useI18n } from './I18nProvider';
 import { matchesShortcut } from '@/lib/hotkeys';
+import { useImageUpload } from '@/hooks/use-image-upload';
 
 interface MainContentProps {
   fragments: Fragment[];
@@ -63,6 +64,18 @@ export function MainContent({ fragments, searchQuery, onSearchChange, onAddFragm
   const [sending, setSending] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const { t } = useI18n();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const { uploading, dragging, openFilePicker, fileInputProps, handlePaste, handleDragOver, handleDragLeave, handleDrop } = useImageUpload({
+    textareaRef,
+    getValue: () => inputValue,
+    setValue: setInputValue,
+    onError: reason => {
+      const key = reason === 'size' ? 'imageTooLarge' : reason === 'type' ? 'imageUnsupported' : 'imageUploadError';
+      setToast({ type: 'error', message: t(key) });
+      setTimeout(() => setToast(null), 4000);
+    },
+  });
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setToast({ type, message });
@@ -151,17 +164,37 @@ export function MainContent({ fragments, searchQuery, onSearchChange, onAddFragm
 
       {/* Quick Record Input (Bottom Floating) */}
       <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-white via-white to-transparent">
-        <div className="max-w-3xl mx-auto relative shadow-lg rounded-xl border border-gray-100 bg-white overflow-hidden focus-within:ring-1 focus-within:ring-gray-300 transition-shadow">
+        <div className={`max-w-3xl mx-auto relative shadow-lg rounded-xl border bg-white overflow-hidden focus-within:ring-1 transition-shadow ${dragging ? 'border-gray-400 ring-2 ring-gray-300' : 'border-gray-100 focus-within:ring-gray-300'
+          }`}>
           <textarea
             id="quick-record-input"
+            ref={textareaRef}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
             placeholder={quickRecordPlaceholder}
             className="w-full p-4 pb-12 resize-none border-none focus:outline-none text-sm text-gray-800 bg-transparent min-h-[100px]"
           />
+          {dragging && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/70 text-xs font-medium text-gray-500">
+              {t('imageDropHint')}
+            </div>
+          )}
           <div className="absolute bottom-3 right-3 flex items-center gap-3">
-            <span className="text-[10px] text-gray-400">{t('markdownSupported')}</span>
+            <span className="text-[10px] text-gray-400">{uploading ? t('uploadingImage') : t('markdownSupported')}</span>
+            <button
+              type="button"
+              onClick={openFilePicker}
+              disabled={uploading || sending}
+              title={t('addImage')}
+              className="p-1.5 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+            >
+              {uploading ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={16} />}
+            </button>
             <button
               onClick={handleSubmit}
               disabled={!inputValue.trim() || sending}
@@ -170,6 +203,7 @@ export function MainContent({ fragments, searchQuery, onSearchChange, onAddFragm
               <Send size={16} />
             </button>
           </div>
+          <input {...fileInputProps} />
         </div>
       </div>
 

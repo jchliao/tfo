@@ -390,7 +390,7 @@ func (fs *FileStore) loadSummary(month, fileName string) (*NoteSummary, error) {
 	result := fs.parser.Parse(string(data))
 	return &NoteSummary{
 		ID: id, Title: result.Title, Tags: result.Tags,
-		CreatedAt: createdAt, Preview: result.Preview,
+		CreatedAt: createdAt, Preview: result.Preview, Images: result.Images,
 	}, nil
 }
 

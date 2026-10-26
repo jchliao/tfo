@@ -11,17 +11,23 @@ type MessageType int
 const (
 	MessageTypeText  MessageType = iota // 纯文本
 	MessageTypeVoice                    // 语音转文字
-	MessageTypeImage                    // 图片 (预留)
+	MessageTypeImage                    // 图片（Images 字段内携带原始字节）
 )
+
+// IncomingImage 通道收到的一张图片，Data 为已解密的原始字节。
+type IncomingImage struct {
+	Data []byte `json:"-"`
+}
 
 // IncomingMessage 从外部通道接收到的原始消息
 type IncomingMessage struct {
-	ChannelType string      `json:"channelType"` // "wechat", "feishu" 等
-	SenderID    string      `json:"senderId"`
-	Content     string      `json:"content"`
-	Type        MessageType `json:"type"`
-	Timestamp   time.Time   `json:"timestamp"`
-	ReplyToken  string      `json:"-"` // 适配器专用回复上下文，不序列化
+	ChannelType string          `json:"channelType"` // "wechat", "feishu" 等
+	SenderID    string          `json:"senderId"`
+	Content     string          `json:"content"`
+	Type        MessageType     `json:"type"`
+	Images      []IncomingImage `json:"-"` // 消息附带的图片，由 Receiver 落盘后写入正文
+	Timestamp   time.Time       `json:"timestamp"`
+	ReplyToken  string          `json:"-"` // 适配器专用回复上下文，不序列化
 }
 
 // ConnState 通道连接状态

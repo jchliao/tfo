@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libi/tfo/internal/search"
+	"github.com/libi/tfo/pkg/mdutil"
 )
 
 // Service 是笔记业务层，通过 Gin HTTP API 暴露给前端
@@ -161,6 +162,18 @@ func (s *Service) SearchByTag(ctx context.Context, tags []string, limit int) ([]
 	return s.searcher.SearchByTag(ctx, tags, 0, limit)
 }
 
+// SearchDocument 由笔记构建搜索索引文档。
+// 图片语法会被剔除，避免搜索结果片段里出现 ![](../attachments/...) 这类内容。
+func SearchDocument(n *Note) *search.IndexDocument {
+	return &search.IndexDocument{
+		ID:        n.ID,
+		Title:     n.Title,
+		Content:   mdutil.StripImages(n.Content),
+		Tags:      n.Tags,
+		CreatedAt: n.CreatedAt,
+	}
+}
+
 // RebuildIndex 全量重建搜索索引
 func (s *Service) RebuildIndex(ctx context.Context) error {
 	if s.indexer == nil {
@@ -168,13 +181,7 @@ func (s *Service) RebuildIndex(ctx context.Context) error {
 	}
 	scanFn := func(ctx context.Context, callback func(*search.IndexDocument) error) error {
 		return s.store.ScanAll(ctx, func(n *Note) error {
-			return callback(&search.IndexDocument{
-				ID:        n.ID,
-				Title:     n.Title,
-				Content:   n.Content,
-				Tags:      n.Tags,
-				CreatedAt: n.CreatedAt,
-			})
+			return callback(SearchDocument(n))
 		})
 	}
 	return s.indexer.Rebuild(ctx, scanFn)
@@ -185,14 +192,7 @@ func (s *Service) indexNote(n *Note) {
 	if s.indexer == nil {
 		return
 	}
-	doc := &search.IndexDocument{
-		ID:        n.ID,
-		Title:     n.Title,
-		Content:   n.Content,
-		Tags:      n.Tags,
-		CreatedAt: n.CreatedAt,
-	}
-	if err := s.indexer.Index(doc); err != nil {
+	if err := s.indexer.Index(SearchDocument(n)); err != nil {
 		log.Printf("[service] index note %s: %v", n.ID, err)
 	}
 }
